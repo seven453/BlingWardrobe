@@ -1,5 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Button, Alert, StyleSheet, ActivityIndicator } from 'react-native';
+import {
+  View, Button, Alert, StyleSheet, ActivityIndicator, Modal,
+  Text, TextInput, TouchableOpacity,
+} from 'react-native';
 import { BoardCanvas, BoardItemData } from 'react-native-skia-board';
 import * as MediaLibrary from 'expo-media-library';
 import { captureRef } from 'react-native-view-shot';
@@ -8,6 +11,8 @@ import { useRoute } from '@react-navigation/native';
 import { removeBackground } from '../utils/removeBackground';
 
 const DIY_STORAGE_KEY = (username: string) => `diy_projects_${username}`;
+const DIY_BACKGROUND_KEY = (username: string) => `diy_background_${username}`;
+const BACKGROUNDS = ['#F5F0EB', '#FFFFFF', '#E8E3DD', '#DDE4E1', '#E5DFE8', '#F0DFDF'];
 
 interface DIYCanvasProps {
   username: string;
@@ -16,7 +21,13 @@ interface DIYCanvasProps {
 export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
   const [items, setItems] = useState<BoardItemData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [backgroundColor, setBackgroundColor] = useState(BACKGROUNDS[0]);
+  const [textModalVisible, setTextModalVisible] = useState(false);
+  const [draftText, setDraftText] = useState('');
+  const [undoStack, setUndoStack] = useState<BoardItemData[][]>([]);
+  const [redoStack, setRedoStack] = useState<BoardItemData[][]>([]);
   const viewRef = useRef<View>(null);
+  const lastImportedUri = useRef<string | null>(null);
   const route = useRoute();
 
   // ---------- 持久化函数 ----------
@@ -40,10 +51,14 @@ export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
   // ---------- 生命周期 ----------
   useEffect(() => {
     const loadData = async () => {
-      const savedItems = await loadCanvasData(username);
+      const [savedItems, savedBackground] = await Promise.all([
+        loadCanvasData(username),
+        AsyncStorage.getItem(DIY_BACKGROUND_KEY(username)),
+      ]);
       if (savedItems.length > 0) {
         setItems(savedItems);
       }
+      if (savedBackground) setBackgroundColor(savedBackground);
       setIsLoading(false);
     };
     loadData();
@@ -55,10 +70,17 @@ export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
     saveCanvasData(username, items);
   }, [items, username, isLoading]);
 
+  useEffect(() => {
+    if (!isLoading) {
+      AsyncStorage.setItem(DIY_BACKGROUND_KEY(username), backgroundColor);
+    }
+  }, [backgroundColor, username, isLoading]);
+
   // 从衣橱传入图片时自动添加（修复类型错误）
   useEffect(() => {
     const params = route.params as { imageUri?: string; category?: string } | undefined;
-    if (params?.imageUri) {
+    if (params?.imageUri && params.imageUri !== lastImportedUri.current) {
+      lastImportedUri.current = params.imageUri;
       (async () => {
         // 使用非空断言，因为上面已经检查过 imageUri 存在
         const transparentUri = await removeBackground(params.imageUri!);
@@ -68,6 +90,30 @@ export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
       })();
     }
   }, [route.params]);
+
+  const updateItems = (updater: (current: BoardItemData[]) => BoardItemData[]) => {
+    setItems(current => {
+      setUndoStack(stack => [...stack.slice(-19), current]);
+      setRedoStack([]);
+      return updater(current);
+    });
+  };
+
+  const undo = () => {
+    if (undoStack.length === 0) return;
+    const previous = undoStack[undoStack.length - 1];
+    setRedoStack(stack => [...stack, items]);
+    setUndoStack(stack => stack.slice(0, -1));
+    setItems(previous);
+  };
+
+  const redo = () => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack(stack => [...stack, items]);
+    setRedoStack(stack => stack.slice(0, -1));
+    setItems(next);
+  };
 
   // ---------- 画布操作 ----------
   const loadImage = async (id: string): Promise<ArrayBuffer> => {
@@ -94,7 +140,7 @@ export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
       height: 150,
       data: { imageUri, category },
     } as any;
-    setItems(prev => [...prev, newItem]);
+    updateItems(prev => [...prev, newItem]);
   };
 
   const addTextToCanvas = (text: string = '输入你的穿搭灵感') => {
@@ -108,7 +154,7 @@ export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
       width: 200,
       height: 60,
     };
-    setItems(prev => [...prev, newItem]);
+    updateItems(prev => [...prev, newItem]);
   };
 
   const saveDesign = async () => {
@@ -136,7 +182,7 @@ export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
   const clearCanvas = () => {
     Alert.alert('清空画布', '确定要清空所有内容吗？', [
       { text: '取消', style: 'cancel' },
-      { text: '清空', style: 'destructive', onPress: () => setItems([]) },
+      { text: '清空', style: 'destructive', onPress: () => updateItems(() => []) },
     ]);
   };
 
@@ -149,28 +195,69 @@ export const DIYCanvas: React.FC<DIYCanvasProps> = ({ username }) => {
   }
 
   return (
-    <View ref={viewRef} style={styles.container}>
+    <View ref={viewRef} style={[styles.container, { backgroundColor }]}>
       <BoardCanvas
         items={items}
         loadImage={loadImage}
         onTransformEnd={(events) => {
           events.forEach(({ id, snapshot }) => {
-            setItems(prev => prev.map(item =>
+            updateItems(prev => prev.map(item =>
               item.id === id ? { ...item, ...snapshot } : item
             ));
           });
         }}
         actions={{
           onDelete: (id) => {
-            setItems(prev => prev.filter(item => item.id !== id));
+            updateItems(prev => prev.filter(item => item.id !== id));
           },
         }}
       />
+      <View style={styles.backgroundBar}>
+        {BACKGROUNDS.map(color => (
+          <TouchableOpacity
+            key={color}
+            accessibilityLabel={`画布背景 ${color}`}
+            onPress={() => setBackgroundColor(color)}
+            style={[
+              styles.colorDot,
+              { backgroundColor: color },
+              color === backgroundColor && styles.selectedColor,
+            ]}
+          />
+        ))}
+      </View>
       <View style={styles.toolbar}>
-        <Button title="添加文字" onPress={() => addTextToCanvas()} />
-        <Button title="保存" onPress={saveDesign} />
+        <Button title="撤销" onPress={undo} disabled={undoStack.length === 0} />
+        <Button title="重做" onPress={redo} disabled={redoStack.length === 0} />
+        <Button title="文字" onPress={() => setTextModalVisible(true)} />
+        <Button title="导出" onPress={saveDesign} />
         <Button title="清空" onPress={clearCanvas} />
       </View>
+      <Modal visible={textModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.textDialog}>
+            <Text style={styles.dialogTitle}>添加文字标签</Text>
+            <TextInput
+              autoFocus
+              maxLength={60}
+              value={draftText}
+              onChangeText={setDraftText}
+              placeholder="输入你的穿搭灵感"
+              style={styles.textInput}
+            />
+            <View style={styles.dialogActions}>
+              <Button title="取消" onPress={() => setTextModalVisible(false)} />
+              <Button title="添加" onPress={() => {
+                const text = draftText.trim();
+                if (!text) return;
+                addTextToCanvas(text);
+                setDraftText('');
+                setTextModalVisible(false);
+              }} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -183,9 +270,43 @@ const styles = StyleSheet.create({
   toolbar: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    padding: 16,
+    paddingVertical: 10,
     backgroundColor: '#ffffff',
     borderTopWidth: 1,
     borderTopColor: '#eee',
   },
+  backgroundBar: {
+    position: 'absolute',
+    top: 14,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+  },
+  colorDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    marginHorizontal: 5,
+    borderWidth: 1,
+    borderColor: '#D8D0C8',
+  },
+  selectedColor: { borderWidth: 3, borderColor: '#9E7777' },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  textDialog: { backgroundColor: '#FFF', borderRadius: 16, padding: 20 },
+  dialogTitle: { fontSize: 18, fontWeight: '600', marginBottom: 14, color: '#4A4A4A' },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#E0D8D0',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 16,
+  },
+  dialogActions: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 16 },
 });

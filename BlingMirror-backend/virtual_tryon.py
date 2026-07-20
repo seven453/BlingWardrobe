@@ -10,8 +10,6 @@ router = APIRouter(prefix="/tryon", tags=["虚拟试穿"])
 
 # ---------- 百炼 aitryon API 配置 ----------
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
-if not DASHSCOPE_API_KEY:
-    raise RuntimeError("请设置环境变量 DASHSCOPE_API_KEY")
 
 BAILIAN_ASYNC_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/image-synthesis"
 BAILIAN_QUERY_API_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
@@ -21,16 +19,17 @@ OSS_ACCESS_KEY_ID = os.environ.get("OSS_ACCESS_KEY_ID")
 OSS_ACCESS_KEY_SECRET = os.environ.get("OSS_ACCESS_KEY_SECRET")
 OSS_ENDPOINT = os.environ.get("OSS_ENDPOINT")
 OSS_BUCKET_NAME = os.environ.get("OSS_BUCKET_NAME")
-if not all([OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT, OSS_BUCKET_NAME]):
-    raise RuntimeError("请设置 OSS 相关环境变量")
-
-
-auth = oss2.Auth(OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET)
-bucket = oss2.Bucket(auth, OSS_ENDPOINT, OSS_BUCKET_NAME)
+bucket = None
+if all([OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT, OSS_BUCKET_NAME]):
+    auth = oss2.Auth(OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET)
+    bucket = oss2.Bucket(auth, OSS_ENDPOINT, OSS_BUCKET_NAME)
 
 async def upload_to_oss(file: UploadFile) -> str:
     """上传文件到 OSS，返回公网 URL"""
-    ext = file.filename.split('.')[-1] if '.' in file.filename else "jpg"
+    if bucket is None:
+        raise HTTPException(status_code=503, detail="OSS 服务尚未配置")
+    filename = file.filename or "image.jpg"
+    ext = filename.rsplit('.', 1)[-1] if '.' in filename else "jpg"
     object_name = f"tryon-images/{uuid.uuid4().hex}.{ext}"
     content = await file.read()
     try:
@@ -41,11 +40,11 @@ async def upload_to_oss(file: UploadFile) -> str:
         print(f"OSS 上传失败: {e}")
         raise HTTPException(status_code=500, detail=f"图片上传失败: {str(e)}")
 
-async def query_task_result(task_id: str) -> str:
+async def query_task_result(task_id: str, max_attempts: int = 90) -> str:
     """轮询百炼任务状态，直到完成，返回生成的图片 URL"""
     headers = {"Authorization": f"Bearer {DASHSCOPE_API_KEY}"}
     async with httpx.AsyncClient(timeout=30.0) as client:
-        while True:
+        for _ in range(max_attempts):
             query_url = BAILIAN_QUERY_API_URL.format(task_id=task_id)
             response = await client.get(query_url, headers=headers)
             response.raise_for_status()
@@ -62,18 +61,24 @@ async def query_task_result(task_id: str) -> str:
                 await asyncio.sleep(2)
             else:
                 raise Exception(f"未知任务状态: {status}")
+        raise TimeoutError("虚拟试穿生成超时，请稍后重试")
 
 @router.post("/")
 async def virtual_tryon(
     person_image: UploadFile = File(...),
-    top_image: UploadFile = File(None),
+    top_image: UploadFile = File(...),
     bottom_image: UploadFile = File(None)
 ):
+    if not DASHSCOPE_API_KEY:
+        raise HTTPException(status_code=503, detail="虚拟试穿尚未配置 DASHSCOPE_API_KEY")
+    if bucket is None:
+        raise HTTPException(status_code=503, detail="虚拟试穿尚未配置 OSS 环境变量")
+
     try:
         # 1. 上传两张图片到 OSS
         person_url = await upload_to_oss(person_image)
         top_url = await upload_to_oss(top_image)
-        bottom_url=await upload_to_oss(bottom_image)
+        bottom_url = await upload_to_oss(bottom_image) if bottom_image else None
         # 2. 构建百炼异步任务请求
         headers = {
             "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
@@ -81,13 +86,16 @@ async def virtual_tryon(
             "X-DashScope-Async": "enable",
             "X-DashScope-OssResourceResolve": "enable"
         }
+        garment_input = {
+            "person_image_url": person_url,
+            "top_garment_url": top_url,
+        }
+        if bottom_url:
+            garment_input["bottom_garment_url"] = bottom_url
+
         payload = {
             "model": "aitryon",
-            "input": {
-                "person_image_url": person_url,
-                "top_garment_url": top_url,
-                "bottom_garment_url": bottom_url,
-            },
+            "input": garment_input,
             "parameters": {
                 "resolution": -1,
                 "restore_face": True
