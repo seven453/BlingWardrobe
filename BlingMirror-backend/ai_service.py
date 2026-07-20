@@ -27,7 +27,7 @@ except Exception as e:
 
 def retrieve_knowledge(query: str, top_k: int = 3) -> str:
     """根据查询字符串检索最相关的知识片段，返回拼接后的文本"""
-    if collection.count() == 0:
+    if collection is None or collection.count() == 0:
         return ""
     try:
         results = collection.query(query_texts=[query], n_results=top_k)

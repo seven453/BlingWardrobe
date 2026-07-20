@@ -7,7 +7,7 @@ from ai_service import get_ai_outfit_recommendation
 from virtual_tryon import router as tryon_router
 
 # -------------------- 初始化 FastAPI --------------------
-app = FastAPI(title="Magic Mirror API", description="AI 穿搭助手后端")
+app = FastAPI(title="Bling Wardrobe API", description="AI 穿搭助手后端")
 
 # 允许跨域（方便前端开发调试）
 app.add_middleware(
@@ -28,13 +28,11 @@ app.include_router(tryon_router)
 
 # -------------------- 高德天气配置 --------------------
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY")
-if not AMAP_API_KEY:
-    raise RuntimeError("请设置环境变量 AMAP_API_KEY")
 
 # -------------------- 根路径 --------------------
 @app.get("/")
 def root():
-    return {"message": "Magic Mirror API is running"}
+    return {"message": "Bling Wardrobe API is running"}
 
 # -------------------- 天气接口（高德地图） --------------------
 @app.get("/weather")
@@ -45,6 +43,9 @@ async def get_weather(
     """
     根据经纬度获取实时天气并生成穿搭建议
     """
+    if not AMAP_API_KEY:
+        raise HTTPException(status_code=503, detail="天气服务尚未配置 AMAP_API_KEY")
+
     try:
         # 1. 地理编码：经纬度转城市 adcode
         geocode_url = f"https://restapi.amap.com/v3/geocode/regeo?output=json&location={lon},{lat}&key={AMAP_API_KEY}"

@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Image, TouchableOpacity,
   Modal, TextInput, Button, Alert, ActivityIndicator, ScrollView
 } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, useFocusEffect, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -281,16 +281,15 @@ function AuthScreen({ onLoginSuccess }: { onLoginSuccess: (username: string) => 
 }
 
 // ========== 衣橱页面组件（分区展示） ==========
-import { useNavigation } from '@react-navigation/native';
 function WardrobeScreen({ username }: { username: string }) {
   const [clothes, setClothes] = useState<ClothingItem[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [newItem, setNewItem] = useState<Partial<ClothingItem>>({});
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const navigation = useNavigation();
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadClothes();
-  }, []);
+  }, [username]));
 
   const loadClothes = async () => {
     try {
@@ -1152,6 +1151,7 @@ const handleMultiTryOn = async () => {
 function ProfileScreen({ username, onLogout }: { username: string; onLogout: () => void }) {
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [clothesCount, setClothesCount] = useState(0);
+  const [outfitCount, setOutfitCount] = useState(0);
   const [preferences, setPreferences] = useState({
     style: '',
     bodyShape: '',
@@ -1163,17 +1163,19 @@ function ProfileScreen({ username, onLogout }: { username: string; onLogout: () 
   const [unusedClothes, setUnusedClothes] = useState<UnusedClothingItem[]>([]);
   const [loadingUnused, setLoadingUnused] = useState(false);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadProfile();
     loadPreferences();
     loadUnusedClothes();
-  }, []);
+  }, [username]));
 
   const loadProfile = async () => {
     const users = await getUsers();
     setUserInfo(users.find(u => u.username === username) || null);
     const stored = await AsyncStorage.getItem(getUserClothesKey(username));
-    if (stored) setClothesCount(JSON.parse(stored).length);
+    setClothesCount(stored ? JSON.parse(stored).length : 0);
+    const history = await getOutfitHistory(username);
+    setOutfitCount(history.length);
   };
 
   const loadPreferences = async () => {
@@ -1228,7 +1230,7 @@ function ProfileScreen({ username, onLogout }: { username: string; onLogout: () 
               <Text style={styles.statLabel}>衣物</Text>
             </View>
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>0</Text>
+              <Text style={styles.statNumber}>{outfitCount}</Text>
               <Text style={styles.statLabel}>搭配</Text>
             </View>
           </View>
@@ -1318,9 +1320,9 @@ function HistoryScreen({ username }: { username: string }) {
   const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadHistory();
-  }, []);
+  }, [username]));
 
   const loadHistory = async () => {
     const data = await getOutfitHistory(username);
