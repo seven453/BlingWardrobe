@@ -5,7 +5,8 @@
 ![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)
 
 Bling布灵电子衣橱是一款面向时尚爱好者的 AI 穿搭助手应用，集成了电子衣橱管理、智能搭配推荐、虚拟试穿、DIY 穿搭创作等功能。前端基于 React Native（Expo）构建，后端使用 FastAPI 提供 API 服务，并集成了 DeepSeek、阿里百炼、高德地图等多种 AI 能力。
-
+> [!IMPORTANT]
+> **版本说明：** 本仓库早期公开版本为基于 React Native + Expo 的移动端原型。目前项目已迭代并重构为微信小程序，采用微信原生框架 + TypeScript 开发前端，并继续使用 FastAPI 提供后端服务。早期 React Native 代码仅用于展示项目演进过程，不代表当前线上版本。
 ---
 
 ## ✨ 功能特性
